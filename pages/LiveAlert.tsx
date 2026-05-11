@@ -1,9 +1,28 @@
-
 import React, { useState, useEffect } from 'react';
 import { Shield, Phone, MapPin, X, Users, AlertCircle, MessageSquare, Bluetooth, Mic, Activity, Fingerprint, RefreshCcw } from 'lucide-react';
 import { mockApi } from '../services/mockApi';
 import { analyzeCrowdDensity } from '../services/geminiService';
 import { SOSAlert, Location, CrowdDensity } from '../types';
+import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Fix leaflet default icon issue
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+// Helper component to recenter map when coordinates change
+function RecenterAutomatically({lat, lng}: {lat: number, lng: number}) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView([lat, lng]);
+  }, [lat, lng, map]);
+  return null;
+}
 
 interface LiveAlertProps {
   onResolve: () => void;
@@ -14,7 +33,7 @@ const LiveAlert: React.FC<LiveAlertProps> = ({ onResolve }) => {
   const [showResolveModal, setShowResolveModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [note, setNote] = useState('');
-  const [simulatedCoords, setSimulatedCoords] = useState<{lat: number, lng: number}>({ lat: 40.7128, lng: -74.0060 });
+  const [realCoords, setRealCoords] = useState<{lat: number, lng: number}>({ lat: 40.7128, lng: -74.0060 });
   
   // Crowd Analysis States
   const [density, setDensity] = useState<CrowdDensity>('UNKNOWN');
@@ -22,21 +41,29 @@ const LiveAlert: React.FC<LiveAlertProps> = ({ onResolve }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   useEffect(() => {
+    let watchId: number;
     const active = mockApi.getActiveAlert();
     if (active) {
       setAlert(active);
+      if (active.locations && active.locations.length > 0) {
+        setRealCoords({ lat: active.locations[0].lat, lng: active.locations[0].lng });
+      }
       runCrowdAnalysis();
+
+      // Real moving location
+      if ('geolocation' in navigator) {
+        watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            setRealCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+            mockApi.updateLocation(active.id, { lat: pos.coords.latitude, lng: pos.coords.longitude, timestamp: Date.now() });
+          },
+          console.error,
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      }
     } else {
       window.location.hash = '/dashboard';
     }
-
-    // Simulate moving location
-    const interval = setInterval(() => {
-      setSimulatedCoords(prev => ({
-        lat: prev.lat + (Math.random() - 0.5) * 0.001,
-        lng: prev.lng + (Math.random() - 0.5) * 0.001
-      }));
-    }, 5000);
 
     // Run crowd analysis periodically
     const analysisInterval = setInterval(() => {
@@ -44,7 +71,7 @@ const LiveAlert: React.FC<LiveAlertProps> = ({ onResolve }) => {
     }, 15000);
 
     return () => {
-      clearInterval(interval);
+      if (watchId) navigator.geolocation.clearWatch(watchId);
       clearInterval(analysisInterval);
     };
   }, []);
@@ -106,19 +133,18 @@ const LiveAlert: React.FC<LiveAlertProps> = ({ onResolve }) => {
       </div>
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 p-4">
-        {/* Left: Map Visualization (Simulated) */}
-        <div className="lg:col-span-3 glass-morphism rounded-3xl relative overflow-hidden bg-slate-900 border-2 border-rose-500/50">
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-center space-y-4">
-              <MapPin className="w-16 h-16 text-rose-500 mx-auto animate-bounce" />
-              <div className="space-y-1">
-                <p className="font-bold text-xl">Current Location Verified</p>
-                <p className="text-slate-400 font-mono text-sm">{simulatedCoords.lat.toFixed(4)}, {simulatedCoords.lng.toFixed(4)}</p>
-              </div>
-            </div>
-          </div>
+        {/* Left: Map Visualization */}
+        <div className="lg:col-span-3 glass-morphism rounded-3xl relative overflow-hidden bg-slate-900 border-2 border-rose-500/50 min-h-[400px]">
+          <MapContainer center={[realCoords.lat, realCoords.lng]} zoom={16} className="w-full h-full absolute inset-0 z-0">
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <Marker position={[realCoords.lat, realCoords.lng]} />
+            <RecenterAutomatically lat={realCoords.lat} lng={realCoords.lng} />
+          </MapContainer>
           
-          <div className="absolute top-4 left-4 bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/10 space-y-1">
+          <div className="absolute top-4 left-4 bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/10 space-y-1 z-10 shadow-lg">
             <p className="text-[10px] uppercase font-bold text-rose-400">Signal Strength</p>
             <div className="flex space-x-1">
               {[1,2,3,4].map(i => <div key={i} className="w-1 h-3 bg-rose-500 rounded-full" />)}

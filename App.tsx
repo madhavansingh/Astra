@@ -49,11 +49,20 @@ const App: React.FC = () => {
   const triggerSOS = async () => {
     // Attempt to get real location
     let location: Location = { lat: 40.7128, lng: -74.0060, timestamp: Date.now() };
-    try {
-      navigator.geolocation.getCurrentPosition((pos) => {
-        location = { lat: pos.coords.latitude, lng: pos.coords.longitude, timestamp: Date.now() };
-      });
-    } catch (e) {}
+    
+    const getRealLocation = () => new Promise<Location>((resolve) => {
+      if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, timestamp: Date.now() }),
+          () => resolve(location), // Fallback on error
+          { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        );
+      } else {
+        resolve(location);
+      }
+    });
+
+    location = await getRealLocation();
     
     await mockApi.triggerSOS(location);
     window.location.hash = '/live-alert';
